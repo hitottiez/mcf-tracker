@@ -3,7 +3,7 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import GradientBoostingClassifier
 
-import generate_detections
+# import generate_detections
 import mcf
 
 _ALMOST_INFTY_NUM_TRAJECTORIES = 5000
@@ -173,6 +173,87 @@ def compute_pairwise_transition_features(
     return features
 
 
+def compute_pairwise_transition_features_with_tsn(
+        time_gap, boxes1, features1, tsn_features1,
+        boxes2, features2, tsn_features2):
+    """Compute features for matching detections from different time steps.
+
+    This function computes the following 8-dimensional feature vector:
+
+    0-1: Number of frames that have passed between the two detections.
+    1-2: Intersection over union bounding box score.
+    2-4: Relative size change (for each axis individually)
+    4-6: Relative position change (for each axis individually)
+    6-7: Appearance descriptor cosine distance
+    7-8: Action descriptor cosine distance
+
+    Parameters
+    ----------
+    time_gap : int
+        It is assumed that all detections in boxes1 have been obtained at the
+        same time step. Likewise, all detections in boxes2 have to be obtained
+        at the same time step. The time_gap is the number of time steps
+        inbetween the two times (successor time index minus predecessor time
+        index).
+    boxes1 : ndarray
+        The first Nx4 dimensional array of N bounding boxes in
+        format (top-left-x, top-left-y, width, height).
+    features1 : ndarray
+        The first NxL dimensional array of N appearance features of
+        length L.
+    tsn_feature1: ndarray
+        The first NxL dimensional array of N action features of
+        length L.
+    boxes2 : ndarray
+        The second Mx4 dimensional array of N bounding boxes in
+        format (top-left-x, top-left-y, width, height).
+    features2 : ndarray
+        The second NxL dimensional array of N appearance features of
+        length L.
+    tsn_feature2: ndarray
+        The second NxL dimensional array of N action features of
+        length L.
+
+    Returns
+    -------
+    ndarray
+        The NxMx7 dimensional array of pair-wise transition features such that
+        element (i, j) contains the 7-dimensional feature vector for pair
+        boxes1[i] and boxes2[j].
+
+    """
+    num_objects1 = len(boxes1)
+    num_objects2 = len(boxes2)
+    assert len(features1) == num_objects1
+    assert len(features2) == num_objects2
+    assert len(tsn_features1) == num_objects1
+    assert len(tsn_features2) == num_objects2
+
+    features = np.zeros((num_objects1, num_objects2, 8))
+    features[:, :, 0:1] = time_gap
+
+    intersection_over_union_score = _iou(boxes1, boxes2)
+    features[:, :, 1:2] = intersection_over_union_score[:, :, np.newaxis]
+
+    size1, size2 = boxes1[:, 2:], boxes2[:, 2:]
+    max_size = np.maximum(size1[:, np.newaxis], size2[np.newaxis, :])
+    features[:, :, 2:4] = np.abs(
+        size1[:, np.newaxis] - size2[np.newaxis, :]) / max_size
+
+    positions1 = boxes1[:, :2] + boxes1[:, 2:] / 2.0
+    positions2 = boxes2[:, :2] + boxes2[:, 2:] / 2.0
+    features[:, :, 4:6] = np.abs(
+        positions1[:, np.newaxis] - positions2[np.newaxis, :]) / max_size
+
+    appearance_similarity = _cosine_distance(features1, features2)
+    features[:, :, 6:7] = appearance_similarity[:, :, np.newaxis]
+
+    action_similarity = _cosine_distance(tsn_features1, tsn_features2)
+    features[:, :, 7:8] = action_similarity[:, :, np.newaxis]
+
+    return features
+
+
 class ObservationCostModel(object):
     """
     The observation cost model computes the cost of adding a detection to any
@@ -244,9 +325,10 @@ class TransitionCostModel(object):
 
     """
 
-    def __init__(self, n_estimators=100):
+    def __init__(self, n_estimators=100, does_use_tsn=False):
         self._classifier = GradientBoostingClassifier(
             n_estimators=n_estimators)
+        self._does_use_tsn = does_use_tsn
 
     def train(self, positive_pairs, negative_pairs):
         """Train model on pairs of positive and negative detections.
@@ -273,19 +355,36 @@ class TransitionCostModel(object):
         # Compute features.
         train_x, train_y = [], []
 
-        for time_gap, box1, feature1, box2, feature2 in positive_pairs:
-            train_x.append(
-                compute_pairwise_transition_features(
-                    time_gap, box1[np.newaxis, :], feature1[np.newaxis, :],
-                    box2[np.newaxis, :], feature2[np.newaxis, :]).ravel())
-            train_y.append(1)
-
-        for time_gap, box1, feature1, box2, feature2 in negative_pairs:
-            train_x.append(
-                compute_pairwise_transition_features(
-                    time_gap, box1[np.newaxis, :], feature1[np.newaxis, :],
-                    box2[np.newaxis, :], feature2[np.newaxis, :]).ravel())
-            train_y.append(0)
+        if self._does_use_tsn:
+            for time_gap, box1, feature1, tsn_feature1, box2, feature2, tsn_feature2 in positive_pairs:
+                train_x.append(
+                    compute_pairwise_transition_features_with_tsn(
+                        time_gap, box1[np.newaxis, :], feature1[np.newaxis, :],
+                        tsn_feature1[np.newaxis, :],
+                        box2[np.newaxis, :], feature2[np.newaxis, :],
+                        tsn_feature2[np.newaxis, :]).ravel())
+                train_y.append(1)
+            for time_gap, box1, feature1, tsn_feature1, box2, feature2, tsn_feature2 in negative_pairs:
+                train_x.append(
+                    compute_pairwise_transition_features_with_tsn(
+                        time_gap, box1[np.newaxis, :], feature1[np.newaxis, :],
+                        tsn_feature1[np.newaxis, :],
+                        box2[np.newaxis, :], feature2[np.newaxis, :],
+                        tsn_feature2[np.newaxis, :]).ravel())
+                train_y.append(0)
+        else:
+            for time_gap, box1, feature1, box2, feature2 in positive_pairs:
+                train_x.append(
+                    compute_pairwise_transition_features(
+                        time_gap, box1[np.newaxis, :], feature1[np.newaxis, :],
+                        box2[np.newaxis, :], feature2[np.newaxis, :]).ravel())
+                train_y.append(1)
+            for time_gap, box1, feature1, box2, feature2 in negative_pairs:
+                train_x.append(
+                    compute_pairwise_transition_features(
+                        time_gap, box1[np.newaxis, :], feature1[np.newaxis, :],
+                        box2[np.newaxis, :], feature2[np.newaxis, :]).ravel())
+                train_y.append(0)
 
         # Shuffle data and train classifier.
         indices = np.random.permutation(len(train_x))
@@ -293,7 +392,8 @@ class TransitionCostModel(object):
         train_y = np.asarray(train_y)[indices]
         self._classifier.fit(train_x, train_y)
 
-    def compute_cost(self, time_gap, boxes1, features1, boxes2, features2):
+    def compute_cost(self, time_gap, boxes1, features1, tsn_features1,
+                     boxes2, features2, tsn_features2):
         """Compute transition cost from given features.
 
         Parameters
@@ -310,11 +410,17 @@ class TransitionCostModel(object):
         features1 : ndarray
             The first NxL dimensional array of N appearance features of
             length L.
+        tsn_features1 : ndarray
+            The first NxL dimensional array of N action features of
+            length L.
         boxes2 : ndarray
             The second Mx4 dimensional array of bounding box coordinates in
             format (top-left-x, top-right-y, width, height).
         features2 : ndarray
             The second MxL dimensional array of M appearance features of
+            length L.
+        tsn_features2 : ndarray
+            The second NxL dimensional array of N action features of
             length L.
 
         Returns
@@ -325,8 +431,13 @@ class TransitionCostModel(object):
             and boxes2[j].
 
         """
-        features = compute_pairwise_transition_features(
-            time_gap, boxes1, features1, boxes2, features2)
+        if self._does_use_tsn:
+            features = compute_pairwise_transition_features_with_tsn(
+                time_gap, boxes1, features1, tsn_features1,
+                boxes2, features2, tsn_features2)
+        else:
+            features = compute_pairwise_transition_features(
+                time_gap, boxes1, features1, boxes2, features2)
         log_probabilities = self._classifier.predict_log_proba(
             features.reshape(len(boxes1) * len(boxes2), features.shape[-1]))
         return -log_probabilities[:, 1].reshape(len(boxes1), len(boxes2))
@@ -429,11 +540,6 @@ class MinCostFlowTracker(object):
         time_gap_to_probability /= time_gap_to_probability[1:].sum()
         self._time_gap_to_cost = -np.log(time_gap_to_probability)
 
-        self._cnn_encoder = (
-            generate_detections.create_box_encoder(
-                cnn_model_filename, cnn_batch_size)
-            if cnn_model_filename is not None else None)
-
         if optimizer_window_len is None:
             self._graph = mcf.Graph()
             self.online_mode = False
@@ -446,7 +552,8 @@ class MinCostFlowTracker(object):
         self.next_frame_idx = 0
         self._nodes_in_timestep = []
 
-    def process(self, boxes, scores, bgr_image=None, features=None):
+    def process(self, boxes, scores, bgr_image=None, features=None,
+                tsn_features=None, tsn_scores=None):
         """Process one frame of detections.
 
         Parameters
@@ -472,11 +579,9 @@ class MinCostFlowTracker(object):
             returns the set of object trajectories at the current time step.
 
         """
-        # Compute features if necessary.
-        if features is None:
-            assert self._cnn_encoder is not None, "No CNN model given"
-            assert bgr_image is not None, "No input image given"
-            features = self._cnn_encoder(bgr_image, boxes)
+        assert features is not None, 'No CNN features'
+        assert tsn_scores is not None, 'No TSN scores'
+        assert tsn_features is not None, 'No TSN features'
 
         # Add nodes to graph for detections observed at this time step.
         observation_costs = (
@@ -488,6 +593,8 @@ class MinCostFlowTracker(object):
                 cost + self._observation_cost_bias, attributes={
                     "box": boxes[i],
                     "feature": features[i],
+                    "tsn_feature": tsn_features[i],
+                    "tsn_scores": tsn_scores[i],
                     "frame_idx": self.next_frame_idx
                 })
             self._graph.link(self._graph.ST, node_id, self.entry_exit_cost)
@@ -505,11 +612,14 @@ class MinCostFlowTracker(object):
                 [node["box"] for node in predecessors])
             predecessor_features = np.asarray(
                 [node["feature"] for node in predecessors])
+            predecessor_tsn_features = np.asarray(
+                [node["tsn_feature"] for node in predecessors])
 
             time_gap = len(predecessor_time_slices) - k
             transition_costs = self.transition_cost_model.compute_cost(
-                time_gap, predecessor_boxes, predecessor_features, boxes,
-                features) + self._time_gap_to_cost[time_gap]
+                time_gap, predecessor_boxes, predecessor_features,
+                predecessor_tsn_features, boxes, features, tsn_features)
+            + self._time_gap_to_cost[time_gap]
 
             for i, costs in enumerate(transition_costs):
                 for j, cost in enumerate(costs):
@@ -524,7 +634,8 @@ class MinCostFlowTracker(object):
             self._graph.finalize_timestep()
             trajectories = self._graph.run_search()
             self.trajectories = [[
-                (self._graph[x]["frame_idx"], self._graph[x]["box"])
+                (self._graph[x]["frame_idx"], self._graph[x]["box"],
+                 self._graph[x]["tsn_scores"])
                 for x in trajectory
             ] for trajectory in trajectories]
 

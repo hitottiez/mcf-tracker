@@ -1,105 +1,92 @@
 # mcf-tracker
 
-This repository contains a simple example on how to use the
-[mcf](https://github.com/nwojke/mcf) library to implement a multi-object
-tracker based on the min-cost flow formulation of [1].
+このリポジトリは、[オリジナル](https://github.com/nwojke/mcf-tracker#installation)をカスタマイズして、学習時に行動認識特徴量を使用するようにしたソースを含んでいます。
 
-The tracker uses [pymotutils](https://github.com/nwojke/pymotutils) for
-reading the dataset and visualization.
-
-## Dependencies
-
-* mcf (added as a git submodule)
-* pymotutils (added as a git submodule)
-* TensorFlow >= 1.0
-* sklearn
-* NumPy
-* OpenCV
-
-## Installation
-
-The mcf library that is used for solving the tracking problem is implemented in
-C++. The project comes with a Makefile to build the library and its
-dependencies:
+## クローン＆Dockerビルド
 
 ```
-git clone https://github.com/nwojke/mcf-tracker.git
+git clone --recursive https://github.com/hitottiez/mcf-tracker.git
+cd mcf-tracker
+docker build -t <tagname> .
+```
+
+## Docker起動&コンテナログイン&セットアップ
+
+もしデータセットを特定のディレクトリで管理している場合は、以下のようにマウントして下さい。
+
+```
+docker run -d -it --name <container_name> \
+    --mount type=bind,src=/<path/to/mcf-tracker>/,dst=/opt/multi_actrecog/mcf-tracker \
+    --mount type=bind,src=/<path/to/dataset>/,dst=/mnt/dataset \
+    <image name> /bin/bash
+```
+
+正常に起動したら、以下のコマンドでログインします。
+
+```
+docker exec -it <container_name> /bin/bash
+```
+
+`make`コマンドを実行します。
+```
 make
 ```
 
-This will also set up the necessary file structure inside the project root. If
-the installation was successful you should have a `mcf.so` inside the project
-root. In addition, a link to the `pymotutils` package should have been created
-and the file `generate_detections.py` should have been copied over from the
-[deep_sort](https://github.com/nwojke/deep_sort) project.
+## 学習
 
-Finally, download the provided CNN checkpoint that comes with the `deep_sort`
-tracker from
-[here](https://owncloud.uni-koblenz.de/owncloud/s/f9JB0Jr7f3zzqs8?path=%2Fresources%2Fnetworks)
-and save it under the project root directory. 
+事前にffmpegでokutamaデータセットを画像に展開し、各特徴量ファイル(`det.txt`, `cnn.txt`, `{rgb, flow, fusion}_.txt`)を所定の場所に設置する必要があります。
+詳細は[mht-paf](https://github.com/hitottiez/mht-paf)を参照して下さい。
 
-### Remark
-
-If available, mcf.so will be built against Python3. If you get an error when
-import mcf you might be using a different Python version.
-
-## Demo on MOT16 dataset
-
-The following section shows how to train and run the tracker on the MOT16
-dataset. The following code downloads the data from the
-[MOTChallenge](http://www.motchallenge.net) project page and creates a
-dataset folder inside the project root. You may skip this step if you have
-downloaded the dataset already.
+以下はデータセットを`/mnt/dataset/okutama_3840_2160/`に設置し、`rgb_tsn.txt`を使用して学習する例です。
+もし行動認識特徴量を使用しない場合は、`--tsn_modality`を`none`にしてください（mcf-trackerオリジナルと同じ挙動になります）。
 
 ```
-wget https://motchallenge.net/data/MOT16.zip
-unzip MOT16.zip -d MOT16
+python okutama_trainer.py \
+        --data_root /mnt/dataset/okutama_3840_2160/ \
+        --tsn_modality rgb \
+        --model_prefix rgb
 ```
 
-### Train the tracker
+実行完了後、同じディレクトリに`rgb_observation_cost_model.pkl`と`rgb_transition_cost_model.pkl`が作成されます。
 
-The tracker must be trained on the MOT16 training sequences before the
-tracking application can be run. If you have followed the instructions above
-the training can be started using the following command:
+## 追跡実行
 
-```
-python motchallenge_trainer.py
-``` 
-
-Note that this can take a while to run. On completion, you should have a
-`motchallenge_observation_cost_model.pkl` and
-`motchallenge_transition_cost_model.pkl` inside the project root directory.
-
-### Run the tracker
-
-You can now run the tracker on one of the test sequences with the following
-command (see `--help` for more options):
+上記コマンドで学習した後は、以下のコマンドで追跡を実行できます。
 
 ```
-python motchallenge_tracking_app --mot_dir=./MOT16/test --sequence=MOT16-06 \
-    --optimizer_window_len=30
+python okutama_tracking_app.py \
+    --data_root /mnt/dataset/okutama_action_dataset/okutama_3840_2160/ \
+    --save_root /mnt/dataset/okutama_action_dataset/mcf-tracker_tracking_result \
+    --tsn_modality rgb \
+    --observation_cost_model rgb_observation_cost_model.pkl \
+    --transition_cost_model	rgb_transition_cost_model.pkl \
+    --observation_cost_bias -3 \
+    --make_movie
 ```
 
-The above command runs the tracker in online mode: At each time step, a
-fixed-length history of frames (here 30) is optimized. Results from previous
-time steps are cached to obtain consistent trajectories.
- 
-If you want to optimize the entire sequence in one batch run the tracker with
-argument `--optimizer_window_len=None`. In this case, you will only see
-detections but no tracking output during the first pass through the sequence.
+学習時に`--tsn_modality`を`none`した場合でも、`--tsn_modality`は`rgb`で構いません。
+内部の処理では行動認識特徴量を無視して処理されます。
 
-On completion, the results will be written to `output_trajectories.txt` in
-MOTChallenge evaluation format and a video of the tracking output will be
-stored in `output_video.avi`. 
 
-## Demo on KITTI dataset
+実行完了後、`/mnt/dataset/okutama_action_dataset/mcf-tracker_tracking_result`に
+以下のディレクトリ構造で結果が`contextlog.dat`に出力されます。
 
-There is a Python application `kitti_tracking_app.py` that runs the tracker
-on the [KITTI tracking](http://www.cvlibs.net/datasets/kitti/eval_tracking.php)
-dataset. It is functional, but poorly document. Feel free to explore it.
+```
+/mnt/dataset/okutama_action_dataset/test_result/
+├── 1.1.8
+│   └── contextlog.dat
+├── 1.1.9
+├── 1.2.1
+├── 1.2.10
+├── 1.2.3
+├── 2.1.8
+├── 2.1.9
+├── 2.2.1
+├── 2.2.10
+└── 2.2.3
+```
 
-## References
+## 評価
 
-[1] Zhang, L., Li, Y., & Nevatia, R. (2008). Global data association for
-multi-object tracking using network flows. In IEEE Conference on Computer Vision
-and Pattern Recognition (pp. 1-8).
+DeepSORTのコンテナにてMOTA,行動認識mAP評価プログラムを実行して下さい。
+詳細は[DeepSORTリポジトリ](https://github.com/hitottiez/deepsort)を参照して下さい。

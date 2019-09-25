@@ -3,13 +3,14 @@ MCF_SOURCE_DIR=$(EXTERNAL_DIR)/mcf
 MCF_BUILD_DIR=$(CURDIR)/build/mcf
 PYMOTUTILS_SOURCE_DIR=$(EXTERNAL_DIR)/pymotutils
 
-all: pymotutils generate_detections.py mcf.so
+#all: pymotutils generate_detections.py mcf.so
+all: pymotutils mcf.so
 
 pymotutils:
 	ln -s $(PYMOTUTILS_SOURCE_DIR)/pymotutils $(CURDIR)
 
-generate_detections.py:
-	wget https://raw.githubusercontent.com/nwojke/deep_sort/master/generate_detections.py
+#generate_detections.py:
+#	wget https://raw.githubusercontent.com/nwojke/deep_sort/master/generate_detections.py
 
 mcf.so:
 	mkdir -p $(MCF_BUILD_DIR)

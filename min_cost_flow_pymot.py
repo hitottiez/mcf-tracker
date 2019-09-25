@@ -5,7 +5,7 @@ import pymotutils
 import min_cost_flow_tracker
 
 
-def collect_positive_negative_pairs(track_set, time_gaps):
+def collect_positive_negative_pairs(track_set, time_gaps, does_use_tsn):
     """Collect positive and negative training pairs for transition cost model.
 
     Parameters
@@ -39,9 +39,14 @@ def collect_positive_negative_pairs(track_set, time_gaps):
     for time_gap in time_gaps:
 
         def iterate_callback(track_id_i, detection_i, track_id_j, detection_j):
-            detection_pair = (
-                time_gap, detection_i.roi, detection_i.feature,
-                detection_j.roi, detection_j.feature)
+            if does_use_tsn:
+                detection_pair = (
+                    time_gap, detection_i.roi, detection_i.feature, detection_i.tsn_feature,
+                    detection_j.roi, detection_j.feature, detection_j.tsn_feature)
+            else:
+                detection_pair = (
+                    time_gap, detection_i.roi, detection_i.feature,
+                    detection_j.roi, detection_j.feature)
 
             if track_id_i == track_id_j:
                 positive_pairs.append(detection_pair)
@@ -59,12 +64,13 @@ class MinCostFlowTrainer(object):
     A convenience class to train observation and transition cost models.
     """
 
-    def __init__(self):
+    def __init__(self, does_use_tsn):
         self._positive_scores = []
         self._negative_scores = []
 
         self._positive_pairs = []
         self._negative_pairs = []
+        self._does_use_tsn = does_use_tsn
 
     def add_dataset(self, ground_truth, detections, max_num_misses):
         """Add a dataset to the set of training examples.
@@ -93,7 +99,7 @@ class MinCostFlowTrainer(object):
             self._negative_scores += [d.confidence for d in false_alarm_list]
 
         positive_pairs, negative_pairs = collect_positive_negative_pairs(
-            track_set, range(1, 1 + max_num_misses))
+            track_set, range(1, 1 + max_num_misses), self._does_use_tsn)
         self._positive_pairs += positive_pairs
         self._negative_pairs += negative_pairs
 
@@ -128,7 +134,8 @@ class MinCostFlowTrainer(object):
             given detections.
 
         """
-        model = min_cost_flow_tracker.TransitionCostModel(n_estimators)
+        model = min_cost_flow_tracker.TransitionCostModel(
+            n_estimators, self._does_use_tsn)
         model.train(self._positive_pairs, self._negative_pairs)
         return model
 
