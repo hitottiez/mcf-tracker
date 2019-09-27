@@ -1,15 +1,15 @@
 # mcf-tracker
-This repository includes modified code of [mcf-tracker](https://github.com/nwojke/mcf-tracker#installation) and it can utilize the primitive action features for human tracking.
+This repository includes modified code of [original mcf-tracker](https://github.com/nwojke/mcf-tracker) and it can utilize the primitive action features for human tracking.
 
 
-## Clone and build a docker image
+## Cloning this repository and building a docker image
 ```
 git clone --recursive https://github.com/hitottiez/mcf-tracker.git
 cd mcf-tracker
 docker build -t <tagname> .
 ```
 
-## Run a docker container and login it
+## Running a docker container and login
 Run:
 ```
 docker run -d -it --name <container_name> \
@@ -44,7 +44,7 @@ When not using the primitive action feature, set `--tsn_modality` as `none`.
 
 Then, `rgb_observation_cost_model.pkl` and `rgb_transition_cost_model.pkl` are created in the current directory.
 
-## Run human tracking and action recognition
+## Running human tracking and action recognition
 Run:
 ```
 python okutama_tracking_app.py \
