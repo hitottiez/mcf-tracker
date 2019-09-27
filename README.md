@@ -2,15 +2,19 @@
 This repository includes modified code of [original mcf-tracker](https://github.com/nwojke/mcf-tracker) and it can utilize the primitive action features for human tracking.
 
 
-## Cloning this repository and building a docker image
+## Setup
+Clone this repository:
 ```
 git clone --recursive https://github.com/hitottiez/mcf-tracker.git
+```
+
+Build a docker image:
+```
 cd mcf-tracker
 docker build -t <tagname> .
 ```
 
-## Running a docker container and login
-Run:
+Run a docker container:
 ```
 docker run -d -it --name <container_name> \
     --mount type=bind,src=/<path/to/mcf-tracker>/,dst=/opt/multi_actrecog/mcf-tracker \
